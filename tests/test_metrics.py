@@ -9,6 +9,8 @@ from simulation.metrics import (
     avg_retransmissions,
     calculate_all_metrics,
     channel_utilization,
+    collision_affected_packets,
+    collision_attempts,
     collision_rate,
     dropped_packets,
     normalized_throughput,
@@ -59,9 +61,9 @@ def hand_computed_dataset():
         - avg_retransmissions = (0*5 + 1 + 2 + 1 + 1 + 1) / 10 = 6 / 10 = 0.60
         - dropped_packets = 3
         - channel_utilization:
-            Busy intervals: [1,2], [3,4], [5,6], [7,8], [9,10], [11,12], [12,13], [14,15], [16,17]
-            Merged [11,13] (2.0s) + seven 1.0s intervals = 9.0s total busy
-            utilization = 9.0 / 20.0 = 0.45
+            Successful-only intervals: [1,2], [3,4], [5,6], [7,8], [9,10], [12,13], [16,17]
+            Total successful busy time = 7.0s
+            utilization = 7.0 / 20.0 = 0.35
     """
     sim_time = 20.0
     packet_duration = 1.0
@@ -120,6 +122,12 @@ def test_collision_rate_formula(hand_computed_dataset):
     assert math.isclose(col_rate, 0.30, abs_tol=1e-9)
 
 
+def test_collision_attempts_and_unique_affected_packets_are_distinct(hand_computed_dataset):
+    d = hand_computed_dataset
+    assert collision_attempts(d["packets"], d["channel_log"], d["sim_time"]) == 3
+    assert collision_affected_packets(d["packets"], d["channel_log"], d["sim_time"]) == 5
+
+
 def test_success_rate_formula(hand_computed_dataset):
     d = hand_computed_dataset
     succ_rate = success_rate(d["packets"], d["channel_log"], d["sim_time"])
@@ -148,7 +156,29 @@ def test_dropped_packets_formula(hand_computed_dataset):
 def test_channel_utilization_formula(hand_computed_dataset):
     d = hand_computed_dataset
     util = channel_utilization(d["packets"], d["channel_log"], d["sim_time"])
-    assert math.isclose(util, 0.45, abs_tol=1e-9)
+    assert math.isclose(util, 0.35, abs_tol=1e-9)
+
+
+def test_channel_utilization_excludes_collision_intervals(hand_computed_dataset):
+    """Verify that adding a COLLISION interval does not increase successful channel utilization."""
+    d = hand_computed_dataset
+    base_util = channel_utilization(d["packets"], d["channel_log"], d["sim_time"])
+
+    # Add a COLLISION interval that does not overlap any existing SUCCESS interval
+    extended_log = list(d["channel_log"]) + [(18.0, 19.0, 9, "COLLISION")]
+    extended_util = channel_utilization(d["packets"], extended_log, d["sim_time"])
+
+    assert math.isclose(base_util, extended_util, abs_tol=1e-9), (
+        "Adding a non-overlapping COLLISION interval should not change successful channel utilization"
+    )
+
+    # Add a COLLISION interval that DOES overlap an existing SUCCESS interval
+    overlapping_log = list(d["channel_log"]) + [(1.5, 2.5, 9, "COLLISION")]
+    overlapping_util = channel_utilization(d["packets"], overlapping_log, d["sim_time"])
+
+    assert math.isclose(base_util, overlapping_util, abs_tol=1e-9), (
+        "Adding an overlapping COLLISION interval should not change successful channel utilization"
+    )
 
 
 def test_calculate_all_metrics_dict(hand_computed_dataset):
@@ -163,7 +193,7 @@ def test_calculate_all_metrics_dict(hand_computed_dataset):
     assert math.isclose(all_metrics["avg_delay"], 10.0 / 7.0, abs_tol=1e-9)
     assert math.isclose(all_metrics["avg_retransmissions"], 0.60, abs_tol=1e-9)
     assert all_metrics["dropped_packets"] == 3
-    assert math.isclose(all_metrics["channel_utilization"], 0.45, abs_tol=1e-9)
+    assert math.isclose(all_metrics["channel_utilization"], 0.35, abs_tol=1e-9)
 
 
 def test_metrics_empty_dataset_edge_cases():

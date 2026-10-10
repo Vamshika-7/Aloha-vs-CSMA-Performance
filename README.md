@@ -23,6 +23,16 @@ Medium Access Control (MAC) protocols govern how contending stations decide when
 4. **Parametric Scaling & Statistical Rigor**: Support parameter sweeps across offered loads ($G$) and node counts ($N$) with multi-run statistical confidence bounds (mean $\pm$ standard deviation).
 5. **Interactive Exploration**: Deliver a responsive Streamlit web interface with interactive Gantt-style channel activity timelines and packet-level inspection.
 
+### Reproducibility policy
+
+An integer seed deterministically derives one immutable traffic stream and one
+independent backoff stream per protocol using NumPy `SeedSequence`. Comparison
+mode generates one shared packet-arrival trace, clones it for each protocol,
+and uses the corresponding protocol backoff stream. A single simulation with
+the same seed and protocol therefore reproduces that protocol's result from
+the comparison. Streamlit result keys include every simulation parameter, and
+the dashboard is synchronized to the Pure ALOHA result after a comparison run.
+
 ---
 
 ## 3. Technologies Used

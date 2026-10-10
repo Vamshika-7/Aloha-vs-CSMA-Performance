@@ -56,6 +56,8 @@ def run_simulation_cached(
     propagation_delay: float,
     max_retries: int,
     seed: int,
+    traffic_trace: Optional[List[Packet]] = None,
+    backoff_rng: Optional[np.random.Generator] = None,
 ) -> Dict[str, Any]:
     """Cached wrapper executing protocol simulation keyed on all input parameters."""
     if protocol == "Pure ALOHA":
@@ -67,6 +69,8 @@ def run_simulation_cached(
             propagation_delay=propagation_delay,
             max_retries=max_retries,
             seed=seed,
+            traffic_trace=traffic_trace,
+            backoff_rng=backoff_rng,
         )
     elif protocol == "Slotted ALOHA":
         return simulate_slotted_aloha(
@@ -77,6 +81,8 @@ def run_simulation_cached(
             propagation_delay=propagation_delay,
             max_retries=max_retries,
             seed=seed,
+            traffic_trace=traffic_trace,
+            backoff_rng=backoff_rng,
         )
     elif protocol == "1-Persistent CSMA":
         return simulate_csma(
@@ -87,6 +93,8 @@ def run_simulation_cached(
             propagation_delay=propagation_delay,
             max_retries=max_retries,
             seed=seed,
+            traffic_trace=traffic_trace,
+            backoff_rng=backoff_rng,
         )
     else:
         raise ValueError(f"Unknown protocol: {protocol}")
@@ -250,6 +258,9 @@ if app_mode == "Compare All Protocols" and 'run_comp_button' in locals() and run
             seed=int(seed),
         )
         st.session_state["comparison_params"] = single_params
+        # Keep the dashboard on the same Pure ALOHA result shown by comparison.
+        st.session_state["simulation_result"] = st.session_state["comparison_result"]["results"]["Pure ALOHA"]
+        st.session_state["last_run_params"] = single_params
 
 sim_result = st.session_state["simulation_result"]
 active_params = st.session_state["last_run_params"]
@@ -317,7 +328,7 @@ with tab_dashboard:
         st.metric(
             label="Collisions",
             value=f"{collision_count:,}",
-            help="Total transmission attempts that suffered collision",
+            help="Total collided transmission attempts; one packet may contribute multiple attempts",
         )
     with r1_col4:
         st.metric(
@@ -357,7 +368,7 @@ with tab_dashboard:
         st.metric(
             label="Collision Rate",
             value=f"{metrics['collision_rate'] * 100:.1f}%",
-            help="Collision events divided by total transmission attempts in channel log",
+            help="Collided transmission attempts divided by all transmission attempts",
         )
     with r3_col2:
         st.metric(
@@ -489,11 +500,19 @@ with tab_comparison:
                     seed=int(seed),
                 )
                 st.session_state["comparison_params"] = single_params
+                st.session_state["simulation_result"] = st.session_state["comparison_result"]["results"]["Pure ALOHA"]
+                st.session_state["last_run_params"] = single_params
                 st.rerun()
 
     if "comparison_result" in st.session_state:
         comp_res = st.session_state["comparison_result"]
         c_params = st.session_state.get("comparison_params", single_params)
+        comparison_is_current = c_params == single_params
+        if not comparison_is_current:
+            st.warning(
+                "These comparison results use an earlier configuration. "
+                "Run the comparison again to evaluate the current sidebar settings."
+            )
         m_pure = comp_res["metrics"]["Pure ALOHA"]
         m_slotted = comp_res["metrics"]["Slotted ALOHA"]
         m_csma = comp_res["metrics"]["1-Persistent CSMA"]
@@ -586,6 +605,8 @@ with tab_comparison:
                     seed=int(seed),
                 )
                 st.session_state["comparison_params"] = single_params
+                st.session_state["simulation_result"] = st.session_state["comparison_result"]["results"]["Pure ALOHA"]
+                st.session_state["last_run_params"] = single_params
                 st.rerun()
 
 

@@ -7,6 +7,7 @@ import pytest
 
 from simulation.base import Packet, PacketStatus
 from simulation.csma import simulate_csma
+from simulation.metrics import calculate_all_metrics
 from simulation.pure_aloha import simulate_pure_aloha
 from simulation.slotted_aloha import simulate_slotted_aloha
 from simulation.sweep import (
@@ -74,6 +75,83 @@ def test_comparison_mode_identical_packet_arrivals():
     assert "Pure ALOHA" in metrics
     assert "Slotted ALOHA" in metrics
     assert "1-Persistent CSMA" in metrics
+
+
+def test_single_runs_reproduce_shared_trace_results_for_each_protocol():
+    """A seed selects one traffic stream and one protocol-specific backoff stream."""
+    config = dict(
+        num_nodes=10,
+        sim_time=1000.0,
+        offered_load=0.1,
+        packet_duration=1.0,
+        propagation_delay=0.01,
+        max_retries=10,
+        seed=42,
+    )
+    comparison = run_comparison_simulation(**config)
+    simulators = {
+        "Pure ALOHA": simulate_pure_aloha,
+        "Slotted ALOHA": simulate_slotted_aloha,
+        "1-Persistent CSMA": simulate_csma,
+    }
+
+    for protocol, simulator in simulators.items():
+        single = simulator(**config)
+        single_metrics = calculate_all_metrics(
+            single["packets"],
+            single["channel_log"],
+            config["sim_time"],
+            config["packet_duration"],
+        )
+        assert single_metrics == comparison["metrics"][protocol]
+        assert [
+            (p.source_node, p.generation_time) for p in single["packets"]
+        ] == [(p.source_node, p.generation_time) for p in comparison["trace"]]
+
+
+def test_seed_repetition_and_change_are_observable():
+    config = dict(
+        num_nodes=5,
+        sim_time=100.0,
+        offered_load=0.5,
+        packet_duration=1.0,
+        propagation_delay=0.01,
+        max_retries=5,
+    )
+    first = run_comparison_simulation(seed=123, **config)
+    repeated = run_comparison_simulation(seed=123, **config)
+    changed = run_comparison_simulation(seed=124, **config)
+
+    first_trace = [(p.source_node, p.generation_time) for p in first["trace"]]
+    assert first_trace == [(p.source_node, p.generation_time) for p in repeated["trace"]]
+    assert first["metrics"] == repeated["metrics"]
+    assert first_trace != [(p.source_node, p.generation_time) for p in changed["trace"]]
+
+
+def test_packet_accounting_and_collision_metric_definitions():
+    result = run_comparison_simulation(
+        num_nodes=8,
+        sim_time=200.0,
+        offered_load=0.8,
+        packet_duration=1.0,
+        propagation_delay=0.01,
+        max_retries=3,
+        seed=77,
+    )
+    for protocol, simulation in result["results"].items():
+        metrics = result["metrics"][protocol]
+        packets = simulation["packets"]
+        assert len(packets) == (
+            sum(p.status == PacketStatus.SUCCESS for p in packets)
+            + sum(p.status == PacketStatus.DROPPED for p in packets)
+            + sum(p.status == PacketStatus.PENDING for p in packets)
+        )
+        assert metrics["collision_attempts"] == sum(
+            entry[3] == "COLLISION" for entry in simulation["channel_log"]
+        )
+        assert metrics["collision_affected_packets"] == sum(
+            packet.retry_count > 0 for packet in packets
+        )
 
 
 # =====================================================================

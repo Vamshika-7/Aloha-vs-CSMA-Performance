@@ -6,6 +6,7 @@ import numpy as np
 from .base import Packet, PacketStatus
 from .csma import simulate_csma
 from .metrics import calculate_all_metrics
+from .randomness import stream_rng
 from .pure_aloha import simulate_pure_aloha
 from .slotted_aloha import simulate_slotted_aloha
 from .traffic import generate_poisson_traffic
@@ -56,7 +57,7 @@ def run_comparison_simulation(
             - 'metrics': {protocol_name: metrics_dict}.
     """
     # 1. Generate one single shared traffic trace from traffic.py using the seed
-    rng = np.random.default_rng(seed)
+    rng = stream_rng(seed, "traffic")
     shared_trace = generate_poisson_traffic(
         num_nodes=num_nodes,
         sim_time=sim_time,
@@ -82,6 +83,7 @@ def run_comparison_simulation(
                 max_retries=max_retries,
                 seed=seed,
                 traffic_trace=trace_copy,
+                backoff_rng=stream_rng(seed, proto),
             )
         else:
             if proto == "Pure ALOHA":
@@ -94,6 +96,7 @@ def run_comparison_simulation(
                     max_retries=max_retries,
                     seed=seed,
                     traffic_trace=trace_copy,
+                    backoff_rng=stream_rng(seed, proto),
                 )
             elif proto == "Slotted ALOHA":
                 res = simulate_slotted_aloha(
@@ -105,6 +108,7 @@ def run_comparison_simulation(
                     max_retries=max_retries,
                     seed=seed,
                     traffic_trace=trace_copy,
+                    backoff_rng=stream_rng(seed, proto),
                 )
             else:
                 res = simulate_csma(
@@ -116,6 +120,7 @@ def run_comparison_simulation(
                     max_retries=max_retries,
                     seed=seed,
                     traffic_trace=trace_copy,
+                    backoff_rng=stream_rng(seed, proto),
                 )
 
         results[proto] = res

@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple, Union
 import numpy as np
 
 from .base import Channel, Node, Packet, PacketStatus
+from .randomness import stream_rng
 from .traffic import generate_poisson_traffic
 
 
@@ -53,6 +54,8 @@ def simulate_csma(
     seed: Optional[Union[int, np.random.Generator]] = None,
     initial_packets: Optional[List[Packet]] = None,
     traffic_trace: Optional[List[Packet]] = None,
+    traffic_rng: Optional[np.random.Generator] = None,
+    backoff_rng: Optional[np.random.Generator] = None,
 ) -> Dict[str, Any]:
     """Runs a discrete-event simulation of the 1-Persistent CSMA MAC protocol.
 
@@ -73,10 +76,7 @@ def simulate_csma(
             - 'channel_log': list of (start_time, end_time, node_id, status) tuples.
             - 'nodes': list of Node objects.
     """
-    if isinstance(seed, np.random.Generator):
-        rng = seed
-    else:
-        rng = np.random.default_rng(seed)
+    rng = stream_rng(seed, "1-Persistent CSMA", backoff_rng)
 
     nodes = [Node(node_id=i) for i in range(num_nodes)]
 
@@ -85,12 +85,13 @@ def simulate_csma(
     if target_trace is not None:
         all_packets = target_trace
     else:
+        traffic_rng = stream_rng(seed, "traffic", traffic_rng)
         all_packets = generate_poisson_traffic(
             num_nodes=num_nodes,
             sim_time=sim_time,
             offered_load=offered_load,
             packet_duration=packet_duration,
-            rng=rng,
+            rng=traffic_rng,
         )
 
     # Track node state: 'IDLE', 'TRANSMITTING', 'WAITING_BUSY', 'BACKING_OFF'

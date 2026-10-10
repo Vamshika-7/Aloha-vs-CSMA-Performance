@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 
 from .base import Channel, Node, Packet, PacketStatus
+from .randomness import stream_rng
 from .traffic import generate_poisson_traffic
 
 
@@ -33,6 +34,8 @@ def simulate_pure_aloha(
     seed: Optional[Union[int, np.random.Generator]] = None,
     initial_packets: Optional[List[Packet]] = None,
     traffic_trace: Optional[List[Packet]] = None,
+    traffic_rng: Optional[np.random.Generator] = None,
+    backoff_rng: Optional[np.random.Generator] = None,
 ) -> Dict[str, Any]:
     """Runs a discrete-event simulation of the Pure ALOHA MAC protocol.
 
@@ -53,27 +56,25 @@ def simulate_pure_aloha(
             - 'channel_log': list of (start_time, end_time, node_id, status) tuples.
             - 'nodes': list of Node objects.
     """
-    if isinstance(seed, np.random.Generator):
-        rng = seed
-    else:
-        rng = np.random.default_rng(seed)
+    rng = stream_rng(seed, "Pure ALOHA", backoff_rng)
 
     # Initialize nodes
     nodes = [Node(node_id=i) for i in range(num_nodes)]
 
     # Generate or inject packet traffic
     target_trace = traffic_trace if traffic_trace is not None else initial_packets
+
     if target_trace is not None:
         all_packets = target_trace
     else:
+        traffic_rng = stream_rng(seed, "traffic", traffic_rng)
         all_packets = generate_poisson_traffic(
             num_nodes=num_nodes,
             sim_time=sim_time,
             offered_load=offered_load,
             packet_duration=packet_duration,
-            rng=rng,
+            rng=traffic_rng,
         )
-
     # Track node state: 'IDLE', 'TRANSMITTING', or 'BACKING_OFF'
     node_state = {i: "IDLE" for i in range(num_nodes)}
 

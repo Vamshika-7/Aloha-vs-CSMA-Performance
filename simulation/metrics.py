@@ -86,6 +86,33 @@ def collision_rate(
     return collision_count / total_transmissions
 
 
+def collision_attempts(
+    packets: List[Packet],
+    channel_log: List[Tuple[float, float, int, str]],
+    sim_time: float,
+) -> int:
+    """Counts collided transmission attempts, including repeated attempts."""
+    return sum(1 for entry in channel_log if entry[3] == "COLLISION")
+
+
+def collision_affected_packets(
+    packets: List[Packet],
+    channel_log: List[Tuple[float, float, int, str]],
+    sim_time: float,
+) -> int:
+    """Counts unique generated packets that experienced at least one collision."""
+    return sum(1 for packet in packets if packet.retry_count > 0)
+
+
+def pending_packets(
+    packets: List[Packet],
+    channel_log: List[Tuple[float, float, int, str]],
+    sim_time: float,
+) -> int:
+    """Counts packets still pending when the simulation window closes."""
+    return sum(1 for packet in packets if packet.status == PacketStatus.PENDING)
+
+
 def success_rate(
     packets: List[Packet],
     channel_log: List[Tuple[float, float, int, str]],
@@ -184,9 +211,13 @@ def channel_utilization(
     if sim_time <= 0.0 or not channel_log:
         return 0.0
 
-    # Extract [start_time, end_time] intervals clamped to [0, sim_time]
+    # Extract [start_time, end_time] intervals from SUCCESS entries only,
+    # clamped to [0, sim_time]. COLLISION intervals are excluded so that
+    # channel utilization reflects only time spent carrying useful data.
     raw_intervals = []
     for entry in channel_log:
+        if entry[3] != "SUCCESS":
+            continue
         s = max(0.0, entry[0])
         e = min(sim_time, entry[1])
         if e > s:
@@ -225,10 +256,13 @@ def calculate_all_metrics(
             - 'throughput'
             - 'normalized_throughput'
             - 'collision_rate'
+            - 'collision_attempts'
+            - 'collision_affected_packets'
             - 'success_rate'
             - 'avg_delay'
             - 'avg_retransmissions'
             - 'dropped_packets'
+            - 'pending_packets'
             - 'channel_utilization'
     """
     return {
@@ -237,9 +271,14 @@ def calculate_all_metrics(
             packets, channel_log, sim_time, packet_duration=packet_duration
         ),
         "collision_rate": collision_rate(packets, channel_log, sim_time),
+        "collision_attempts": collision_attempts(packets, channel_log, sim_time),
+        "collision_affected_packets": collision_affected_packets(
+            packets, channel_log, sim_time
+        ),
         "success_rate": success_rate(packets, channel_log, sim_time),
         "avg_delay": avg_delay(packets, channel_log, sim_time),
         "avg_retransmissions": avg_retransmissions(packets, channel_log, sim_time),
         "dropped_packets": dropped_packets(packets, channel_log, sim_time),
+        "pending_packets": pending_packets(packets, channel_log, sim_time),
         "channel_utilization": channel_utilization(packets, channel_log, sim_time),
     }
