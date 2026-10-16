@@ -197,16 +197,18 @@ def channel_utilization(
     channel_log: List[Tuple[float, float, int, str]],
     sim_time: float,
 ) -> float:
-    """Calculates the fraction of simulation time the channel was busy carrying transmissions.
+    """Calculates channel utilization as the fraction of simulation time carrying successful transmissions.
 
-    Overlapping transmission intervals are merged to avoid double-counting channel occupancy.
+    Only transmission intervals resulting in SUCCESS are counted; collision intervals are
+    strictly excluded so that utilization measures useful data transfer time. Overlapping
+    intervals (if any) are merged to avoid double-counting channel occupancy.
 
     Formula:
-        channel_utilization = (total busy duration of merged transmission intervals) / sim_time
+        channel_utilization = (total duration of merged SUCCESS transmission intervals) / sim_time
 
     Denominator:
         sim_time (total simulation duration in seconds).
-        Returns 0.0 if sim_time <= 0.
+        Returns 0.0 if sim_time <= 0 or if there are no successful transmissions.
     """
     if sim_time <= 0.0 or not channel_log:
         return 0.0
@@ -243,6 +245,53 @@ def channel_utilization(
     return total_busy_time / sim_time
 
 
+def channel_busy_fraction(
+    packets: List[Packet],
+    channel_log: List[Tuple[float, float, int, str]],
+    sim_time: float,
+) -> float:
+    """Calculates the channel busy fraction as the total share of simulation time the channel was occupied.
+
+    Counts all transmission airtime across all attempts, including both SUCCESS and
+    COLLISION intervals. Overlapping transmission intervals are merged to avoid
+    double-counting channel occupancy during collisions.
+
+    Formula:
+        channel_busy_fraction = (total busy duration of all merged transmission intervals) / sim_time
+
+    Denominator:
+        sim_time (total simulation duration in seconds).
+        Returns 0.0 if sim_time <= 0 or if channel_log is empty.
+    """
+    if sim_time <= 0.0 or not channel_log:
+        return 0.0
+
+    raw_intervals = []
+    for entry in channel_log:
+        s = max(0.0, entry[0])
+        e = min(sim_time, entry[1])
+        if e > s:
+            raw_intervals.append((s, e))
+
+    if not raw_intervals:
+        return 0.0
+
+    # Sort intervals by start time
+    raw_intervals.sort(key=lambda iv: iv[0])
+
+    # Merge overlapping intervals
+    merged = [raw_intervals[0]]
+    for current_start, current_end in raw_intervals[1:]:
+        last_start, last_end = merged[-1]
+        if current_start <= last_end:
+            merged[-1] = (last_start, max(last_end, current_end))
+        else:
+            merged.append((current_start, current_end))
+
+    total_busy_time = sum(e - s for s, e in merged)
+    return total_busy_time / sim_time
+
+
 def calculate_all_metrics(
     packets: List[Packet],
     channel_log: List[Tuple[float, float, int, str]],
@@ -264,6 +313,7 @@ def calculate_all_metrics(
             - 'dropped_packets'
             - 'pending_packets'
             - 'channel_utilization'
+            - 'channel_busy_fraction'
     """
     return {
         "throughput": throughput(packets, channel_log, sim_time),
@@ -281,4 +331,5 @@ def calculate_all_metrics(
         "dropped_packets": dropped_packets(packets, channel_log, sim_time),
         "pending_packets": pending_packets(packets, channel_log, sim_time),
         "channel_utilization": channel_utilization(packets, channel_log, sim_time),
+        "channel_busy_fraction": channel_busy_fraction(packets, channel_log, sim_time),
     }

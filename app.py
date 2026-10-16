@@ -13,7 +13,17 @@ import pandas as pd
 import streamlit as st
 
 from simulation.base import Packet, PacketStatus
+from simulation.consistency import run_consistency_checks
 from simulation.csma import simulate_csma
+from simulation.export import (
+    dataframe_to_csv_bytes,
+    export_comparison_dataframe,
+    export_consistency_dataframe,
+    export_metrics_dataframe,
+    export_packets_dataframe,
+    export_sweep_aggregated_dataframe,
+    export_sweep_raw_dataframe,
+)
 from simulation.metrics import calculate_all_metrics
 from simulation.pure_aloha import simulate_pure_aloha
 from simulation.slotted_aloha import simulate_slotted_aloha
@@ -24,6 +34,7 @@ from simulation.sweep import (
     run_load_sweep,
     run_node_sweep,
 )
+from simulation.theory import compute_throughput_peaks
 from visualization.sweep_plots import (
     plot_load_vs_collision_rate,
     plot_load_vs_delay,
@@ -259,8 +270,10 @@ if app_mode == "Compare All Protocols" and 'run_comp_button' in locals() and run
         )
         st.session_state["comparison_params"] = single_params
         # Keep the dashboard on the same Pure ALOHA result shown by comparison.
+        comp_pure_params = dict(single_params)
+        comp_pure_params["protocol"] = "Pure ALOHA"
         st.session_state["simulation_result"] = st.session_state["comparison_result"]["results"]["Pure ALOHA"]
-        st.session_state["last_run_params"] = single_params
+        st.session_state["last_run_params"] = comp_pure_params
 
 sim_result = st.session_state["simulation_result"]
 active_params = st.session_state["last_run_params"]
@@ -340,7 +353,7 @@ with tab_dashboard:
     st.markdown("---")
 
     # Row 2: Throughput, Efficiency, and Utilization
-    r2_col1, r2_col2, r2_col3 = st.columns(3)
+    r2_col1, r2_col2, r2_col3, r2_col4 = st.columns(4)
     with r2_col1:
         st.metric(
             label="Throughput",
@@ -357,7 +370,13 @@ with tab_dashboard:
         st.metric(
             label="Channel Utilization",
             value=f"{metrics['channel_utilization'] * 100:.1f}%",
-            help="Fraction of simulation duration channel was actively occupied",
+            help="Share of time the channel carried successful packet transmissions (excludes collisions)",
+        )
+    with r2_col4:
+        st.metric(
+            label="Channel Busy Fraction",
+            value=f"{metrics['channel_busy_fraction'] * 100:.1f}%",
+            help="Total share of time the channel carried any transmission, including collisions",
         )
 
     st.markdown("---")
@@ -381,6 +400,47 @@ with tab_dashboard:
             label="Average Retransmissions",
             value=f"{metrics['avg_retransmissions']:.2f}",
             help="Total retransmissions divided by total generated packets",
+        )
+
+    # Export Metrics Summary CSV
+    df_metrics_export = export_metrics_dataframe(metrics, active_params)
+    st.download_button(
+        label="📥 Download Metrics Summary (CSV)",
+        data=dataframe_to_csv_bytes(df_metrics_export),
+        file_name=f"metrics_summary_{active_params['protocol'].lower().replace(' ', '_')}.csv",
+        mime="text/csv",
+    )
+
+    st.markdown("---")
+
+    # Consistency Checks Expander
+    consistency_results = run_consistency_checks(sim_result, active_params)
+    all_passed = all(passed for _, passed, _ in consistency_results)
+    passed_count = sum(1 for _, passed, _ in consistency_results)
+    total_checks = len(consistency_results)
+
+    status_icon = "✅" if all_passed else "❌"
+    with st.expander(
+        f"🔍 Consistency Checks ({status_icon} {passed_count}/{total_checks} Passed)",
+        expanded=not all_passed,
+    ):
+        if all_passed:
+            st.success(f"All {total_checks} simulation consistency and invariant checks passed.")
+        else:
+            st.error(f"{total_checks - passed_count} of {total_checks} consistency check(s) failed.")
+
+        check_table = [
+            {"Status": "✅ Pass" if p else "❌ Fail", "Check": name, "Details": det}
+            for name, p, det in consistency_results
+        ]
+        st.dataframe(pd.DataFrame(check_table), use_container_width=True, hide_index=True)
+
+        df_consistency_export = export_consistency_dataframe(consistency_results, active_params)
+        st.download_button(
+            label="📥 Download Consistency Results (CSV)",
+            data=dataframe_to_csv_bytes(df_consistency_export),
+            file_name=f"consistency_checks_{active_params['protocol'].lower().replace(' ', '_')}.csv",
+            mime="text/csv",
         )
 
 
@@ -443,6 +503,14 @@ with tab_simulation:
             hide_index=True,
             height=500,
         )
+
+        df_packets_export = export_packets_dataframe(packets, active_params)
+        st.download_button(
+            label="📥 Download Packet-Level Table (CSV)",
+            data=dataframe_to_csv_bytes(df_packets_export),
+            file_name=f"packets_{active_params['protocol'].lower().replace(' ', '_')}.csv",
+            mime="text/csv",
+        )
     else:
         st.warning("No packets were generated in this simulation run. Try increasing Offered Load or Simulation Duration.")
 
@@ -500,8 +568,10 @@ with tab_comparison:
                     seed=int(seed),
                 )
                 st.session_state["comparison_params"] = single_params
+                comp_pure_params = dict(single_params)
+                comp_pure_params["protocol"] = "Pure ALOHA"
                 st.session_state["simulation_result"] = st.session_state["comparison_result"]["results"]["Pure ALOHA"]
-                st.session_state["last_run_params"] = single_params
+                st.session_state["last_run_params"] = comp_pure_params
                 st.rerun()
 
     if "comparison_result" in st.session_state:
@@ -588,10 +658,54 @@ with tab_comparison:
                 "Slotted ALOHA": f"{m_slotted['channel_utilization'] * 100:.1f}%",
                 "1-Persistent CSMA": f"{m_csma['channel_utilization'] * 100:.1f}%",
             },
+            {
+                "Metric": "Channel Busy Fraction",
+                "Pure ALOHA": f"{m_pure['channel_busy_fraction'] * 100:.1f}%",
+                "Slotted ALOHA": f"{m_slotted['channel_busy_fraction'] * 100:.1f}%",
+                "1-Persistent CSMA": f"{m_csma['channel_busy_fraction'] * 100:.1f}%",
+            },
         ]
 
         df_comp = pd.DataFrame(comp_table_data)
         st.dataframe(df_comp, use_container_width=True, hide_index=True)
+
+        df_comp_export = export_comparison_dataframe(comp_res, c_params)
+        st.download_button(
+            label="📥 Download Comparison Metrics (CSV)",
+            data=dataframe_to_csv_bytes(df_comp_export),
+            file_name="protocol_comparison_metrics.csv",
+            mime="text/csv",
+        )
+
+        # Consistency Checks Expander for Comparison Mode
+        comp_consistency_results = run_consistency_checks(comp_res, c_params)
+        c_all_passed = all(passed for _, passed, _ in comp_consistency_results)
+        c_passed_count = sum(1 for _, passed, _ in comp_consistency_results)
+        c_total_checks = len(comp_consistency_results)
+
+        c_status_icon = "✅" if c_all_passed else "❌"
+        with st.expander(
+            f"🔍 Consistency Checks ({c_status_icon} {c_passed_count}/{c_total_checks} Passed across protocols)",
+            expanded=not c_all_passed,
+        ):
+            if c_all_passed:
+                st.success(f"All {c_total_checks} consistency checks passed across all protocols.")
+            else:
+                st.error(f"{c_total_checks - c_passed_count} of {c_total_checks} consistency check(s) failed.")
+
+            c_check_table = [
+                {"Status": "✅ Pass" if p else "❌ Fail", "Check": name, "Details": det}
+                for name, p, det in comp_consistency_results
+            ]
+            st.dataframe(pd.DataFrame(c_check_table), use_container_width=True, hide_index=True)
+
+            df_comp_consistency_export = export_consistency_dataframe(comp_consistency_results, c_params)
+            st.download_button(
+                label="📥 Download Comparison Consistency Results (CSV)",
+                data=dataframe_to_csv_bytes(df_comp_consistency_export),
+                file_name="comparison_consistency_checks.csv",
+                mime="text/csv",
+            )
 
         if st.button("Re-run Comparison on Current Parameters"):
             with st.spinner("Re-running comparison..."):
@@ -605,8 +719,10 @@ with tab_comparison:
                     seed=int(seed),
                 )
                 st.session_state["comparison_params"] = single_params
+                comp_pure_params = dict(single_params)
+                comp_pure_params["protocol"] = "Pure ALOHA"
                 st.session_state["simulation_result"] = st.session_state["comparison_result"]["results"]["Pure ALOHA"]
-                st.session_state["last_run_params"] = single_params
+                st.session_state["last_run_params"] = comp_pure_params
                 st.rerun()
 
 
@@ -647,7 +763,7 @@ with tab_load_analysis:
     # Compute load points
     if sw_step <= 0:
         sw_step = 0.1
-    load_points = list(np.round(np.arange(sw_min_load, sw_max_load + 1e-6, sw_step), 3))
+    load_points = [round(float(x), 3) for x in np.arange(sw_min_load, sw_max_load + 1e-6, sw_step)]
     total_load_sims = len(load_points) * 3 * int(sw_runs)
 
     st.write(
@@ -674,7 +790,7 @@ with tab_load_analysis:
             status_text.text(f"Running simulation {completed} of {total} ({frac * 100:.1f}% complete)...")
 
         protocols_to_sweep = ["Pure ALOHA", "Slotted ALOHA", "1-Persistent CSMA"]
-        sweep_data = run_load_sweep(
+        sweep_data, raw_sweep_data = run_load_sweep(
             load_points=load_points,
             protocols=protocols_to_sweep,
             num_nodes=int(num_nodes),
@@ -686,28 +802,76 @@ with tab_load_analysis:
             num_runs=int(sw_runs),
             run_sim_cached_fn=run_simulation_cached,
             progress_callback=update_progress,
+            return_raw=True,
         )
 
         prog_bar.empty()
         status_text.empty()
         st.session_state["load_sweep_df"] = pd.DataFrame(sweep_data)
+        st.session_state["load_sweep_raw_records"] = raw_sweep_data
         st.session_state["load_sweep_sim_time"] = sw_sim_time
+        st.session_state["load_sweep_params"] = {
+            "num_nodes": int(num_nodes),
+            "sim_time": float(sw_sim_time),
+            "packet_duration": float(packet_duration),
+            "propagation_delay": float(propagation_delay),
+            "max_retries": int(max_retries),
+            "seed": int(seed),
+        }
 
     # Display Load Sweep Plots if data available
     if "load_sweep_df" in st.session_state:
         df_load_sweep = st.session_state["load_sweep_df"]
 
         st.markdown("### Offered Load Sweep Results (Plots 1–4)")
+
+        show_theory = st.checkbox(
+            "Overlay Theoretical Throughput Curves (Pure & Slotted ALOHA)",
+            value=False,
+            help="Displays analytical throughput curves S = G * exp(-2G) for Pure ALOHA and S = G * exp(-G) for Slotted ALOHA.",
+        )
+
         p_col1, p_col2 = st.columns(2)
         with p_col1:
-            st.plotly_chart(plot_load_vs_throughput(df_load_sweep), use_container_width=True)
+            st.plotly_chart(plot_load_vs_throughput(df_load_sweep, show_theory=show_theory), use_container_width=True)
+            st.info(
+                "Simulated values can differ from theory because the simulation has a finite number of nodes, "
+                "per-node queues, a retry limit and finite duration, while the formulas assume an infinite "
+                "population and Poisson offered traffic that includes retransmissions."
+            )
+            st.markdown("##### Peak Throughput Comparison")
+            df_peaks = compute_throughput_peaks(df_load_sweep)
+            st.dataframe(df_peaks, use_container_width=True, hide_index=True)
+
             st.plotly_chart(plot_load_vs_delay(df_load_sweep), use_container_width=True)
         with p_col2:
             st.plotly_chart(plot_load_vs_collision_rate(df_load_sweep), use_container_width=True)
             st.plotly_chart(plot_load_vs_retransmissions(df_load_sweep), use_container_width=True)
 
-        with st.expander("View Raw Load Sweep Data"):
+        with st.expander("View Aggregated Load Sweep Table"):
             st.dataframe(df_load_sweep, use_container_width=True, hide_index=True)
+
+        # CSV Download buttons for Load Sweep
+        sw_dl_col1, sw_dl_col2 = st.columns(2)
+        with sw_dl_col1:
+            raw_records = st.session_state.get("load_sweep_raw_records", [])
+            df_load_raw = export_sweep_raw_dataframe(raw_records)
+            st.download_button(
+                label="📥 Download Raw Load Sweep Results (CSV)",
+                data=dataframe_to_csv_bytes(df_load_raw),
+                file_name="load_sweep_raw_results.csv",
+                mime="text/csv",
+                disabled=df_load_raw.empty,
+            )
+        with sw_dl_col2:
+            load_meta_params = st.session_state.get("load_sweep_params", single_params)
+            df_load_agg = export_sweep_aggregated_dataframe(df_load_sweep, load_meta_params)
+            st.download_button(
+                label="📥 Download Aggregated Load Sweep Summary (CSV)",
+                data=dataframe_to_csv_bytes(df_load_agg),
+                file_name="load_sweep_aggregated_summary.csv",
+                mime="text/csv",
+            )
 
     st.markdown("---")
 
@@ -739,7 +903,7 @@ with tab_load_analysis:
             n_status_text.text(f"Running node simulation {completed} of {total} ({frac * 100:.1f}% complete)...")
 
         protocols_to_sweep = ["Pure ALOHA", "Slotted ALOHA", "1-Persistent CSMA"]
-        node_sweep_data = run_node_sweep(
+        node_sweep_data, raw_node_sweep_data = run_node_sweep(
             node_points=node_points,
             protocols=protocols_to_sweep,
             offered_load=float(fixed_sweep_load),
@@ -751,18 +915,50 @@ with tab_load_analysis:
             num_runs=int(node_runs),
             run_sim_cached_fn=run_simulation_cached,
             progress_callback=update_node_progress,
+            return_raw=True,
         )
 
         n_prog_bar.empty()
         n_status_text.empty()
         st.session_state["node_sweep_df"] = pd.DataFrame(node_sweep_data)
+        st.session_state["node_sweep_raw_records"] = raw_node_sweep_data
+        st.session_state["node_sweep_params"] = {
+            "offered_load": float(fixed_sweep_load),
+            "sim_time": float(node_sim_time),
+            "packet_duration": float(packet_duration),
+            "propagation_delay": float(propagation_delay),
+            "max_retries": int(max_retries),
+            "seed": int(seed),
+        }
 
     if "node_sweep_df" in st.session_state:
         df_node_sweep = st.session_state["node_sweep_df"]
         st.plotly_chart(plot_nodes_vs_throughput(df_node_sweep), use_container_width=True)
 
-        with st.expander("View Raw Node Sweep Data"):
+        with st.expander("View Aggregated Node Sweep Table"):
             st.dataframe(df_node_sweep, use_container_width=True, hide_index=True)
+
+        # CSV Download buttons for Node Sweep
+        node_dl_col1, node_dl_col2 = st.columns(2)
+        with node_dl_col1:
+            raw_node_records = st.session_state.get("node_sweep_raw_records", [])
+            df_node_raw = export_sweep_raw_dataframe(raw_node_records)
+            st.download_button(
+                label="📥 Download Raw Node Sweep Results (CSV)",
+                data=dataframe_to_csv_bytes(df_node_raw),
+                file_name="node_sweep_raw_results.csv",
+                mime="text/csv",
+                disabled=df_node_raw.empty,
+            )
+        with node_dl_col2:
+            node_meta_params = st.session_state.get("node_sweep_params", single_params)
+            df_node_agg = export_sweep_aggregated_dataframe(df_node_sweep, node_meta_params)
+            st.download_button(
+                label="📥 Download Aggregated Node Sweep Summary (CSV)",
+                data=dataframe_to_csv_bytes(df_node_agg),
+                file_name="node_sweep_aggregated_summary.csv",
+                mime="text/csv",
+            )
 
 
 # =====================================================================

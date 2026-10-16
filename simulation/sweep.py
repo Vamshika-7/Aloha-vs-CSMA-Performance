@@ -1,6 +1,6 @@
 """Comparison mode, load sweep, and multi-run statistical evaluation module."""
 
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import numpy as np
 
 from .base import Packet, PacketStatus
@@ -177,7 +177,8 @@ def run_load_sweep(
     num_runs: int,
     run_sim_cached_fn: Callable[..., Dict[str, Any]],
     progress_callback: Optional[Callable[[int, int], None]] = None,
-) -> List[Dict[str, Any]]:
+    return_raw: bool = False,
+) -> Union[List[Dict[str, Any]], Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]]:
     """Executes a multi-run parameter sweep across offered loads for specified protocols.
 
     Args:
@@ -192,14 +193,18 @@ def run_load_sweep(
         num_runs: Number of independent simulation runs per (load, protocol).
         run_sim_cached_fn: Cached simulation executor.
         progress_callback: Optional callable(completed, total) to report progress.
+        return_raw: If True, returns (aggregated_results, raw_results).
 
     Returns:
-        List of aggregated record dictionaries with mean and std for all metrics.
+        List of aggregated record dictionaries with mean and std for all metrics,
+        or tuple of (aggregated_results, raw_results) if return_raw=True.
     """
+    load_points = [round(float(g), 4) for g in load_points]
     total_steps = len(load_points) * len(protocols) * num_runs
     completed_steps = 0
 
     aggregated_results: List[Dict[str, Any]] = []
+    raw_results: List[Dict[str, Any]] = []
 
     for g in load_points:
         for proto in protocols:
@@ -223,6 +228,30 @@ def run_load_sweep(
                     packet_duration=packet_duration,
                 )
                 runs_metrics.append(m)
+                raw_results.append({
+                    "protocol": proto,
+                    "offered_load_g": round(float(g), 4),
+                    "load": round(float(g), 4),
+                    "num_nodes": int(num_nodes),
+                    "seed": run_seed,
+                    "run_index": r,
+                    "sim_time_s": float(sim_time),
+                    "packet_duration_s": float(packet_duration),
+                    "propagation_delay_s": float(propagation_delay),
+                    "max_retries": int(max_retries),
+                    "throughput_pkts_per_s": m["throughput"],
+                    "normalized_throughput_s": m["normalized_throughput"],
+                    "collision_rate": m["collision_rate"],
+                    "collision_attempts": m["collision_attempts"],
+                    "collision_affected_packets": m["collision_affected_packets"],
+                    "success_rate": m["success_rate"],
+                    "avg_delay_s": m["avg_delay"],
+                    "avg_retransmissions": m["avg_retransmissions"],
+                    "dropped_packets": m["dropped_packets"],
+                    "pending_packets": m["pending_packets"],
+                    "channel_utilization": m["channel_utilization"],
+                    "channel_busy_fraction": m["channel_busy_fraction"],
+                })
 
                 completed_steps += 1
                 if progress_callback:
@@ -240,6 +269,8 @@ def run_load_sweep(
 
             aggregated_results.append(record)
 
+    if return_raw:
+        return aggregated_results, raw_results
     return aggregated_results
 
 
@@ -255,7 +286,8 @@ def run_node_sweep(
     num_runs: int,
     run_sim_cached_fn: Callable[..., Dict[str, Any]],
     progress_callback: Optional[Callable[[int, int], None]] = None,
-) -> List[Dict[str, Any]]:
+    return_raw: bool = False,
+) -> Union[List[Dict[str, Any]], Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]]:
     """Executes a multi-run parameter sweep across node counts for specified protocols.
 
     Args:
@@ -270,14 +302,17 @@ def run_node_sweep(
         num_runs: Number of independent simulation runs per (nodes, protocol).
         run_sim_cached_fn: Cached simulation executor.
         progress_callback: Optional callable(completed, total) to report progress.
+        return_raw: If True, returns (aggregated_results, raw_results).
 
     Returns:
-        List of aggregated record dictionaries with mean and std for all metrics.
+        List of aggregated record dictionaries with mean and std for all metrics,
+        or tuple of (aggregated_results, raw_results) if return_raw=True.
     """
     total_steps = len(node_points) * len(protocols) * num_runs
     completed_steps = 0
 
     aggregated_results: List[Dict[str, Any]] = []
+    raw_results: List[Dict[str, Any]] = []
 
     for n_nodes in node_points:
         for proto in protocols:
@@ -301,6 +336,29 @@ def run_node_sweep(
                     packet_duration=packet_duration,
                 )
                 runs_metrics.append(m)
+                raw_results.append({
+                    "protocol": proto,
+                    "num_nodes": int(n_nodes),
+                    "offered_load_g": round(float(offered_load), 4),
+                    "seed": run_seed,
+                    "run_index": r,
+                    "sim_time_s": float(sim_time),
+                    "packet_duration_s": float(packet_duration),
+                    "propagation_delay_s": float(propagation_delay),
+                    "max_retries": int(max_retries),
+                    "throughput_pkts_per_s": m["throughput"],
+                    "normalized_throughput_s": m["normalized_throughput"],
+                    "collision_rate": m["collision_rate"],
+                    "collision_attempts": m["collision_attempts"],
+                    "collision_affected_packets": m["collision_affected_packets"],
+                    "success_rate": m["success_rate"],
+                    "avg_delay_s": m["avg_delay"],
+                    "avg_retransmissions": m["avg_retransmissions"],
+                    "dropped_packets": m["dropped_packets"],
+                    "pending_packets": m["pending_packets"],
+                    "channel_utilization": m["channel_utilization"],
+                    "channel_busy_fraction": m["channel_busy_fraction"],
+                })
 
                 completed_steps += 1
                 if progress_callback:
@@ -318,4 +376,6 @@ def run_node_sweep(
 
             aggregated_results.append(record)
 
+    if return_raw:
+        return aggregated_results, raw_results
     return aggregated_results

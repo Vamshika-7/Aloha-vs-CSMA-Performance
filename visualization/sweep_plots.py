@@ -1,6 +1,7 @@
 """Plotly visualization functions for parameter sweep and multi-run statistical analysis."""
 
 from typing import Any, Dict, List
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 
@@ -60,9 +61,13 @@ def _create_sweep_line_plot(
 
         error_dict = None
         if show_error:
+            # Clip the lower end of error bars at 0 so y - arrayminus >= 0
+            std_minus = np.minimum(std_vals, np.maximum(y_vals, 0.0))
             error_dict = dict(
                 type="data",
+                symmetric=False,
                 array=std_vals,
+                arrayminus=std_minus,
                 visible=True,
                 thickness=1.5,
                 width=4,
@@ -107,6 +112,7 @@ def _create_sweep_line_plot(
             gridcolor="#E5E7EB",
             zeroline=True,
             zerolinecolor="#9CA3AF",
+            rangemode="tozero",
         ),
         legend=dict(
             orientation="h",
@@ -123,9 +129,9 @@ def _create_sweep_line_plot(
     return fig
 
 
-def plot_load_vs_throughput(sweep_df: pd.DataFrame) -> go.Figure:
-    """Plot 1: Offered Load (G) vs Throughput."""
-    return _create_sweep_line_plot(
+def plot_load_vs_throughput(sweep_df: pd.DataFrame, show_theory: bool = False) -> go.Figure:
+    """Plot 1: Offered Load (G) vs Throughput, optionally with theoretical curves for ALOHA."""
+    fig = _create_sweep_line_plot(
         df=sweep_df,
         x_col="load",
         y_mean_col="throughput_mean",
@@ -136,6 +142,43 @@ def plot_load_vs_throughput(sweep_df: pd.DataFrame) -> go.Figure:
         y_scale=1.0,
         y_format=".3f",
     )
+
+    if show_theory:
+        from simulation.theory import pure_aloha_throughput, slotted_aloha_throughput
+
+        max_g = 1.5
+        if not sweep_df.empty and "load" in sweep_df.columns:
+            max_g = max(float(sweep_df["load"].max()), 1.5)
+
+        g_smooth = np.linspace(0.0, max_g, 200)
+
+        # Pure ALOHA theoretical curve: S = G * exp(-2G)
+        s_pure = pure_aloha_throughput(g_smooth)
+        fig.add_trace(
+            go.Scatter(
+                name="Pure ALOHA (theoretical)",
+                x=g_smooth,
+                y=s_pure,
+                mode="lines",
+                line=dict(color=PROTOCOL_COLORS.get("Pure ALOHA", "#3B82F6"), dash="dash", width=2),
+                hovertemplate="<b>Pure ALOHA (theoretical)</b><br>Offered Load (G): %{x:.3f}<br>Throughput: %{y:.3f}<extra></extra>",
+            )
+        )
+
+        # Slotted ALOHA theoretical curve: S = G * exp(-G)
+        s_slotted = slotted_aloha_throughput(g_smooth)
+        fig.add_trace(
+            go.Scatter(
+                name="Slotted ALOHA (theoretical)",
+                x=g_smooth,
+                y=s_slotted,
+                mode="lines",
+                line=dict(color=PROTOCOL_COLORS.get("Slotted ALOHA", "#F59E0B"), dash="dash", width=2),
+                hovertemplate="<b>Slotted ALOHA (theoretical)</b><br>Offered Load (G): %{x:.3f}<br>Throughput: %{y:.3f}<extra></extra>",
+            )
+        )
+
+    return fig
 
 
 def plot_load_vs_collision_rate(sweep_df: pd.DataFrame) -> go.Figure:

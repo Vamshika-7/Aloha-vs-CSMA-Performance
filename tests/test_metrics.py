@@ -8,6 +8,7 @@ from simulation.metrics import (
     avg_delay,
     avg_retransmissions,
     calculate_all_metrics,
+    channel_busy_fraction,
     channel_utilization,
     collision_affected_packets,
     collision_attempts,
@@ -194,6 +195,40 @@ def test_calculate_all_metrics_dict(hand_computed_dataset):
     assert math.isclose(all_metrics["avg_retransmissions"], 0.60, abs_tol=1e-9)
     assert all_metrics["dropped_packets"] == 3
     assert math.isclose(all_metrics["channel_utilization"], 0.35, abs_tol=1e-9)
+    assert math.isclose(all_metrics["channel_busy_fraction"], 0.45, abs_tol=1e-9)
+
+
+def test_channel_busy_fraction_formula(hand_computed_dataset):
+    """Verify channel_busy_fraction includes both successful and collided intervals."""
+    d = hand_computed_dataset
+    cbf = channel_busy_fraction(d["packets"], d["channel_log"], d["sim_time"])
+    # 7s successful + 2s non-overlapping collision = 9.0s busy / 20.0s = 0.45
+    assert math.isclose(cbf, 0.45, abs_tol=1e-9)
+
+
+def test_channel_busy_fraction_greater_or_equal_to_utilization(hand_computed_dataset):
+    """Verify that channel_busy_fraction is always >= channel_utilization."""
+    d = hand_computed_dataset
+    util = channel_utilization(d["packets"], d["channel_log"], d["sim_time"])
+    busy = channel_busy_fraction(d["packets"], d["channel_log"], d["sim_time"])
+    assert busy >= util
+    assert math.isclose(util, 0.35, abs_tol=1e-9)
+    assert math.isclose(busy, 0.45, abs_tol=1e-9)
+
+
+def test_channel_busy_fraction_includes_collisions_when_utilization_does_not(hand_computed_dataset):
+    """Verify adding collision interval increases busy fraction but not utilization."""
+    d = hand_computed_dataset
+    base_util = channel_utilization(d["packets"], d["channel_log"], d["sim_time"])
+    base_busy = channel_busy_fraction(d["packets"], d["channel_log"], d["sim_time"])
+
+    # Add 1s collision interval at [18, 19]
+    extended_log = list(d["channel_log"]) + [(18.0, 19.0, 9, "COLLISION")]
+    new_util = channel_utilization(d["packets"], extended_log, d["sim_time"])
+    new_busy = channel_busy_fraction(d["packets"], extended_log, d["sim_time"])
+
+    assert math.isclose(new_util, base_util, abs_tol=1e-9)
+    assert math.isclose(new_busy, base_busy + (1.0 / d["sim_time"]), abs_tol=1e-9)
 
 
 def test_metrics_empty_dataset_edge_cases():
@@ -206,3 +241,4 @@ def test_metrics_empty_dataset_edge_cases():
     assert avg_retransmissions([], [], 10.0) == 0.0
     assert dropped_packets([], [], 10.0) == 0
     assert channel_utilization([], [], 10.0) == 0.0
+    assert channel_busy_fraction([], [], 10.0) == 0.0

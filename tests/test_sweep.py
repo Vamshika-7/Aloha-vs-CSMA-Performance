@@ -264,3 +264,87 @@ def test_single_run_statistics_zero_std():
     assert stats["throughput"]["std"] == 0.0
     assert math.isclose(stats["collision_rate"]["mean"], 0.12, abs_tol=1e-9)
     assert stats["collision_rate"]["std"] == 0.0
+
+
+def test_dashboard_vs_comparison_pure_aloha_identical_results():
+    """Regression test: Single simulation and Comparison mode must produce identical results.
+
+    With identical parameters:
+    (nodes=10, duration=1000, load=0.1, packet duration=1, propagation delay=0.01, max retries=10, seed=42)
+    both code paths must produce identical traffic traces, collision schedules, and metrics.
+    """
+    config = dict(
+        num_nodes=10,
+        sim_time=1000.0,
+        offered_load=0.1,
+        packet_duration=1.0,
+        propagation_delay=0.01,
+        max_retries=10,
+        seed=42,
+    )
+
+    single_pure = simulate_pure_aloha(**config)
+    single_metrics = calculate_all_metrics(
+        single_pure["packets"],
+        single_pure["channel_log"],
+        config["sim_time"],
+        config["packet_duration"],
+    )
+
+    comp_result = run_comparison_simulation(**config)
+    comp_pure = comp_result["results"]["Pure ALOHA"]
+    comp_metrics = comp_result["metrics"]["Pure ALOHA"]
+
+    # 1. Total packets generated must match identically
+    assert len(single_pure["packets"]) == len(comp_pure["packets"])
+
+    # 2. Packet-level lifecycle matching
+    for p_single, p_comp in zip(single_pure["packets"], comp_pure["packets"]):
+        assert p_single.packet_id == p_comp.packet_id
+        assert p_single.source_node == p_comp.source_node
+        assert math.isclose(p_single.generation_time, p_comp.generation_time, abs_tol=1e-9)
+        assert p_single.status == p_comp.status
+        assert p_single.retry_count == p_comp.retry_count
+        if p_single.successful_time is not None:
+            assert math.isclose(p_single.successful_time, p_comp.successful_time, abs_tol=1e-9)
+
+    # 3. Channel log events must match identically
+    assert len(single_pure["channel_log"]) == len(comp_pure["channel_log"])
+    for e_single, e_comp in zip(single_pure["channel_log"], comp_pure["channel_log"]):
+        assert math.isclose(e_single[0], e_comp[0], abs_tol=1e-9)
+        assert math.isclose(e_single[1], e_comp[1], abs_tol=1e-9)
+        assert e_single[2] == e_comp[2]
+        assert e_single[3] == e_comp[3]
+
+    # 4. All calculated metrics must match identically
+    for k, v in single_metrics.items():
+        assert k in comp_metrics, f"Missing metric {k} in comparison result"
+        assert math.isclose(float(v), float(comp_metrics[k]), abs_tol=1e-9), (
+            f"Metric mismatch for {k}: single={v} vs comp={comp_metrics[k]}"
+        )
+
+
+def test_load_sweep_plain_float_labels():
+    """Verify that load_points in load sweep results are plain Python floats."""
+    raw_loads = np.arange(0.1, 0.4, 0.1)  # numpy array of np.float64
+    def mock_sim(protocol, num_nodes, sim_time, offered_load, packet_duration, propagation_delay, max_retries, seed):
+        return {"packets": [], "channel_log": []}
+
+    results = run_load_sweep(
+        load_points=raw_loads,
+        protocols=["Pure ALOHA"],
+        num_nodes=2,
+        sim_time=10.0,
+        packet_duration=1.0,
+        propagation_delay=0.01,
+        max_retries=3,
+        base_seed=42,
+        num_runs=1,
+        run_sim_cached_fn=mock_sim,
+    )
+
+    for row in results:
+        load_val = row["load"]
+        assert type(load_val) is float, f"Expected plain float, got {type(load_val)}"
+        assert not isinstance(load_val, np.floating) or type(load_val) is float
+
